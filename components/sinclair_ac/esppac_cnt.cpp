@@ -1231,6 +1231,7 @@ bool SinclairACCNT::processUnitReport()
 
     int Temset = (this->serialProcess_.data[protocol::REPORT_TEMP_SET_BYTE] & protocol::REPORT_TEMP_SET_MASK) >> protocol::REPORT_TEMP_SET_POS;
     bool Temrec = this->serialProcess_.data[protocol::REPORT_DISP_F_BYTE] & protocol::TEMREC_MASK;
+    bool displayFahrenheit = this->serialProcess_.data[protocol::REPORT_DISP_F_BYTE] & protocol::REPORT_DISP_F_MASK;
 
     float newTargetTemperature = 0;
     
@@ -1238,7 +1239,9 @@ bool SinclairACCNT::processUnitReport()
           ESP_LOGW(TAG, "Invalid Temset reived !");
     else
     {
-        if (Temrec)
+        if (!displayFahrenheit)
+            newTargetTemperature = Temset + protocol::REPORT_TEMP_SET_OFF;
+        else if (Temrec)
             newTargetTemperature = Temrec1[Temset];
         else
             newTargetTemperature = Temrec0[Temset];
