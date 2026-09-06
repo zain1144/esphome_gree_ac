@@ -402,7 +402,7 @@ bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &co
     };
     for (const char *field : required_fields)
     {
-        if (!root.containsKey(field))
+        if (root[field].isNull())
         {
             error = std::string("Missing required field: ") + field;
             return false;
@@ -619,7 +619,7 @@ void SinclairACCNT::apply_full_command_(const FullCommand &command)
 
     this->mode = command.power ? command.mode : climate::CLIMATE_MODE_OFF;
     this->target_temperature = command.target_temperature;
-    this->set_custom_fan_mode_(command.fan_mode);
+    this->set_custom_fan_mode_(command.fan_mode.c_str(), command.fan_mode.size());
     this->horizontal_swing_state_ = command.horizontal_swing;
     this->vertical_swing_state_ = command.vertical_swing;
     this->display_state_ = command.display_mode;
