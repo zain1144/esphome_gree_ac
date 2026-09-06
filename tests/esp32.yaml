@@ -1,0 +1,47 @@
+esphome:
+  name: sinclair-ac-http-esp32-test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "compile-test"
+  password: "compile-test-password"
+
+logger:
+
+uart:
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 4800
+  parity: EVEN
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [sinclair_ac]
+
+climate:
+  - platform: sinclair_ac
+    name: Compile Test AC
+    horizontal_swing_select:
+      name: Compile Test Horizontal Swing
+    vertical_swing_select:
+      name: Compile Test Vertical Swing
+    display_select:
+      name: Compile Test Display
+    display_unit_select:
+      name: Compile Test Display Unit
+    plasma_switch:
+      name: Compile Test Plasma
+    beeper_switch:
+      name: Compile Test Beeper
+    sleep_switch:
+      name: Compile Test Sleep
+    xfan_switch:
+      name: Compile Test X-fan
+    save_switch:
+      name: Compile Test Save
