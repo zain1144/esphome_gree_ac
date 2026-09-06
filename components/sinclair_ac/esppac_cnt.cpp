@@ -117,6 +117,8 @@ const char *friendly_display_mode(const std::string &display_mode)
 void SinclairACCNT::setup()
 {
     SinclairAC::setup();
+    this->register_service(&SinclairACCNT::on_native_full_command_, "set_full_state", {"command"});
+    ESP_LOGCONFIG(TAG, "Full command Native API action enabled as set_full_state");
     if (this->web_server_base_ != nullptr)
     {
         this->web_server_base_->init();
@@ -379,11 +381,34 @@ void SinclairACCNT::handleRequest(AsyncWebServerRequest *request)
     request->send(200, "application/json", response.c_str());
 }
 
+void SinclairACCNT::on_native_full_command_(std::string command_json)
+{
+    FullCommand command;
+    std::string error;
+    if (!this->parse_full_command_(command_json, command, error))
+    {
+        ESP_LOGW(TAG, "Rejected complete Native API command: %s", error.c_str());
+        return;
+    }
+    if (this->state_ != ACState::Ready)
+    {
+        ESP_LOGW(TAG, "Rejected complete Native API command: no active serial connection to the air conditioner");
+        return;
+    }
+
+    this->apply_full_command_(command);
+}
+
 bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &command, std::string &error)
 {
     if (body.empty())
     {
         error = "Request body is empty";
+        return false;
+    }
+    if (body.size() > FULL_COMMAND_MAX_BODY_SIZE)
+    {
+        error = "JSON command exceeds 2048 bytes";
         return false;
     }
 
@@ -644,7 +669,7 @@ void SinclairACCNT::apply_full_command_(const FullCommand &command)
     this->update_save(command.save_mode);
     this->publish_state();
 
-    ESP_LOGI(TAG, "Accepted complete HTTP command; one AC state update is pending");
+    ESP_LOGI(TAG, "Accepted complete state command; one AC state update is pending");
 }
 
 json::SerializationBuffer<> SinclairACCNT::state_json_()

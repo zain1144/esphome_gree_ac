@@ -36,14 +36,31 @@ After you've connected the module to your AC, it should pop under settings/integ
 
 **USE AT YOUR OWN RISK!**
 
-## Complete command HTTP API
+## Complete state command APIs
 
-The component exposes a transport-independent complete-state command through HTTP. It parses and validates the entire
+The component accepts the same complete-state JSON through ESPHome's Native API and HTTP. It validates the entire
 request before changing any state, then schedules one protocol update containing all supported settings. It does not
-use an ESPHome template text entity, so the template text 255-character limit does not apply. The JSON request body is
+use an ESPHome template text entity, so the template text 255-character limit does not apply. The JSON command is
 limited to 2048 bytes.
 
-Send a `POST` request to `http://DEVICE_IP/ac/control` with `Content-Type: application/json`:
+Add `custom_services: true` to the device's Native API configuration:
+
+```yaml
+api:
+  custom_services: true
+```
+
+Home Assistant then exposes the action `esphome.<node_name>_set_full_state`. For a node named `gree`, a script can call
+it as follows:
+
+```yaml
+action: esphome.gree_set_full_state
+data:
+  command: >-
+    {"SchemaVersion":1,"Command":"SetFullState","Power":true,"Mode":"Cool","TargetTemperature":22,"FanSpeed":"Low","HorizontalSwing":"ConstantMiddle","VerticalSwing":"ConstantUp","DisplayMode":"ActualTemperature","DisplayTemperatureUnit":"Celsius","Plasma":false,"Beeper":true,"Sleep":false,"XFan":false,"SaveMode":false}
+```
+
+For HTTP clients, send a `POST` request to `http://DEVICE_IP/ac/control` with `Content-Type: application/json`:
 
 ```json
 {
@@ -82,4 +99,5 @@ conditioner. Supported values are:
 Read the current state with `GET http://DEVICE_IP/ac/state`. The response includes `CurrentTemperature`, which is
 read-only and is therefore not accepted as part of a control command.
 
-The endpoint shares ESPHome's HTTP server and honors `web_server` authentication when authentication is configured.
+The HTTP endpoint shares ESPHome's HTTP server and honors `web_server` authentication when authentication is configured.
+Native API and HTTP both use the same parser and the same single-update path to the air conditioner.
