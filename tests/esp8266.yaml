@@ -1,0 +1,46 @@
+esphome:
+  name: sinclair-ac-http-test
+
+esp8266:
+  board: esp01_1m
+
+wifi:
+  ssid: "compile-test"
+  password: "compile-test-password"
+
+logger:
+  baud_rate: 0
+
+uart:
+  tx_pin: GPIO1
+  rx_pin: GPIO3
+  baud_rate: 4800
+  parity: EVEN
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [sinclair_ac]
+
+climate:
+  - platform: sinclair_ac
+    name: Compile Test AC
+    horizontal_swing_select:
+      name: Compile Test Horizontal Swing
+    vertical_swing_select:
+      name: Compile Test Vertical Swing
+    display_select:
+      name: Compile Test Display
+    display_unit_select:
+      name: Compile Test Display Unit
+    plasma_switch:
+      name: Compile Test Plasma
+    beeper_switch:
+      name: Compile Test Beeper
+    sleep_switch:
+      name: Compile Test Sleep
+    xfan_switch:
+      name: Compile Test X-fan
+    save_switch:
+      name: Compile Test Save

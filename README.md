@@ -35,3 +35,51 @@ See the 4 module cable photos for wiring (for flashing and the wiring for connec
 After you've connected the module to your AC, it should pop under settings/integrations/esphome as a 'new device' and then you can add it to HA. If not, check if it started a WIFI access point, which it will do if it can't connect to your home wifi. You can then connect to that and configure it from there (via 192.168.4.1)
 
 **USE AT YOUR OWN RISK!**
+
+## Complete command HTTP API
+
+The component exposes a transport-independent complete-state command through HTTP. It parses and validates the entire
+request before changing any state, then schedules one protocol update containing all supported settings. It does not
+use an ESPHome template text entity, so the template text 255-character limit does not apply. The JSON request body is
+limited to 2048 bytes.
+
+Send a `POST` request to `http://DEVICE_IP/ac/control` with `Content-Type: application/json`:
+
+```json
+{
+  "SchemaVersion": 1,
+  "Command": "SetFullState",
+  "Power": true,
+  "Mode": "Cool",
+  "TargetTemperature": 22,
+  "FanSpeed": "Low",
+  "HorizontalSwing": "ConstantMiddle",
+  "VerticalSwing": "ConstantUp",
+  "DisplayMode": "ActualTemperature",
+  "DisplayTemperatureUnit": "Celsius",
+  "Plasma": false,
+  "Beeper": true,
+  "Sleep": false,
+  "XFan": false,
+  "SaveMode": false
+}
+```
+
+Every field is required. Unknown fields and unsupported values are rejected without sending a command to the air
+conditioner. Supported values are:
+
+- `Mode`: `Auto`, `Cool`, `Heat`, `Dry`, `FanOnly`
+- `TargetTemperature`: a whole number from `16` through `30`
+- `FanSpeed`: `Auto`, `Low`, `Medium`, `High`, `Turbo`
+- `HorizontalSwing`: `Off`, `SwingFull`, `ConstantLeft`, `ConstantMidLeft`, `ConstantMiddle`, `ConstantMidRight`,
+  `ConstantRight`
+- `VerticalSwing`: `Off`, `SwingFull`, `SwingDown`, `SwingMidDown`, `SwingMiddle`, `SwingMidUp`, `SwingUp`,
+  `ConstantDown`, `ConstantMidDown`, `ConstantMiddle`, `ConstantMidUp`, `ConstantUp`
+- `DisplayMode`: `Off`, `Auto`, `SetTemperature`, `ActualTemperature`, `OutsideTemperature`
+- `DisplayTemperatureUnit`: `Celsius`, `Fahrenheit`
+- `Power`, `Plasma`, `Beeper`, `Sleep`, `XFan`, `SaveMode`: JSON booleans (`true` or `false`)
+
+Read the current state with `GET http://DEVICE_IP/ac/state`. The response includes `CurrentTemperature`, which is
+read-only and is therefore not accepted as part of a control command.
+
+The endpoint shares ESPHome's HTTP server and honors `web_server` authentication when authentication is configured.
