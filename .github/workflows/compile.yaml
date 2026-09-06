@@ -1,0 +1,17 @@
+name: Compile
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  esp8266:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install esphome==2026.8.2
+      - run: esphome compile tests/esp8266.yaml

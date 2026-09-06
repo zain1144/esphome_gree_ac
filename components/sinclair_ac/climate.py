@@ -4,10 +4,17 @@ from esphome.const import (
 )
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import uart, climate, sensor, select, switch
+from esphome.components import (
+    climate,
+    select,
+    sensor,
+    switch,
+    uart,
+    web_server_base,
+)
 
-AUTO_LOAD = ["switch", "sensor", "select"]
-DEPENDENCIES = ["uart"]
+AUTO_LOAD = ["switch", "sensor", "select", "json", "web_server_base"]
+DEPENDENCIES = ["uart", "network"]
 
 sinclair_ac_ns = cg.esphome_ns.namespace("sinclair_ac")
 SinclairAC = sinclair_ac_ns.class_(
@@ -101,6 +108,9 @@ CONFIG_SCHEMA = cv.All(
     SCHEMA.extend(
         {
             cv.GenerateID(): cv.declare_id(SinclairACCNT),
+            cv.GenerateID(
+                web_server_base.CONF_WEB_SERVER_BASE_ID
+            ): cv.use_id(web_server_base.WebServerBase),
             cv.Optional(CONF_CURRENT_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
         }
     ),
@@ -112,6 +122,11 @@ async def to_code(config):
     await climate.register_climate(var, config)
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
+
+    web_server = await cg.get_variable(
+        config[web_server_base.CONF_WEB_SERVER_BASE_ID]
+    )
+    cg.add(var.set_web_server_base(web_server))
     
     if CONF_HORIZONTAL_SWING_SELECT in config:
         conf = config[CONF_HORIZONTAL_SWING_SELECT]

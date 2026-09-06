@@ -1,7 +1,11 @@
 // based on: https://github.com/DomiStyle/esphome-panasonic-ac
 #include "esphome/components/climate/climate.h"
 #include "esphome/components/climate/climate_mode.h"
+#include "esphome/components/json/json_util.h"
+#include "esphome/components/web_server_base/web_server_base.h"
 #include "esppac.h"
+
+#include <map>
 
 namespace esphome {
 namespace sinclair_ac {
@@ -149,9 +153,34 @@ namespace protocol {
 /* Define packets from AC that would be processed by software */
 const std::vector<uint8_t> allowedPackets = {protocol::CMD_IN_UNIT_REPORT};
 
-class SinclairACCNT : public SinclairAC {
+struct FullCommand {
+        bool power;
+        climate::ClimateMode mode;
+        float target_temperature;
+        std::string fan_mode;
+        std::string horizontal_swing;
+        std::string vertical_swing;
+        std::string display_mode;
+        std::string display_unit;
+        bool plasma;
+        bool beeper;
+        bool sleep;
+        bool xfan;
+        bool save_mode;
+};
+
+class SinclairACCNT : public SinclairAC, public AsyncWebHandler {
     public:
         void control(const climate::ClimateCall &call) override;
+
+        void set_web_server_base(web_server_base::WebServerBase *web_server_base) {
+            this->web_server_base_ = web_server_base;
+        }
+
+        bool canHandle(AsyncWebServerRequest *request) const override;
+        void handleRequest(AsyncWebServerRequest *request) override;
+        void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) override;
+        bool isRequestHandlerTrivial() const override { return false; }
 
         void on_horizontal_swing_change(const std::string &swing) override;
         void on_vertical_swing_change(const std::string &swing) override;
@@ -169,6 +198,19 @@ class SinclairACCNT : public SinclairAC {
         void loop() override;
 
     protected:
+        struct HttpRequestBody {
+            std::string data;
+            bool too_large{false};
+            bool invalid_chunks{false};
+        };
+
+        static constexpr size_t FULL_COMMAND_MAX_BODY_SIZE = 2048;
+        static constexpr const char *FULL_COMMAND_PATH = "/ac/control";
+        static constexpr const char *STATE_PATH = "/ac/state";
+
+        web_server_base::WebServerBase *web_server_base_{nullptr};
+        std::map<AsyncWebServerRequest *, HttpRequestBody> request_bodies_;
+
         ACState state_ = ACState::Initializing; /* Stores if the AC is responsive or not */
         ACUpdate update_ = ACUpdate::NoUpdate;  /* Stores if we need tu send update to AC or no */
 
@@ -202,6 +244,11 @@ class SinclairACCNT : public SinclairAC {
         bool determine_sleep();
         bool determine_xfan();
         bool determine_save();
+
+        bool parse_full_command_(const std::string &body, FullCommand &command, std::string &error);
+        void apply_full_command_(const FullCommand &command);
+        json::SerializationBuffer<> state_json_();
+        void send_json_error_(AsyncWebServerRequest *request, int status, const char *error, const std::string &detail);
 };
 
 }  // namespace CNT
