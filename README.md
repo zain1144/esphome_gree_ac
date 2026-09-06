@@ -36,31 +36,131 @@ After you've connected the module to your AC, it should pop under settings/integ
 
 **USE AT YOUR OWN RISK!**
 
-## Complete state command APIs
+## Complete-state API reference
 
-The component accepts the same complete-state JSON through ESPHome's Native API and HTTP. It validates the entire
-request before changing any state, then schedules one protocol update containing all supported settings. It does not
-use an ESPHome template text entity, so the template text 255-character limit does not apply. The JSON command is
-limited to 2048 bytes.
+The component accepts one complete control command, `SetFullState`, through either ESPHome Native API or HTTP. Both
+transports use the same JSON schema, parser, validation, and single-update path. A valid command changes every writable
+setting in one AC protocol update. Invalid commands change nothing and send no update to the air conditioner.
 
-Add `custom_services: true` to the device's Native API configuration:
+The JSON command is limited to 2048 bytes. It is carried as a normal Native API string or HTTP request body and does
+not use an ESPHome template text entity, so the template text 255-character limit does not apply.
+
+### Available operations
+
+| Transport | Operation | Input | Result |
+| --- | --- | --- | --- |
+| Native API | `esphome.<node_name>_set_full_state` | One string argument named `command`, containing the complete JSON object | Validates and schedules one AC state update |
+| HTTP | `POST /ac/control` | The complete JSON object as the request body | Validates and schedules one AC state update |
+| HTTP | `GET /ac/state` | None | Returns the current known state as JSON |
+| HTTP | `OPTIONS /ac/control` or `OPTIONS /ac/state` | None | Returns `204` for HTTP preflight |
+
+There are no partial custom commands. `SetFullState` always requires every writable field, including fields whose value
+is unchanged or temporarily irrelevant while the unit is off. Normal ESPHome climate and select entities remain
+available separately in Home Assistant.
+
+### Required ESPHome configuration
+
+Enable custom Native API actions and the HTTP web server:
 
 ```yaml
 api:
   custom_services: true
+
+web_server:
+  port: 80
 ```
 
-Home Assistant then exposes the action `esphome.<node_name>_set_full_state`. For a node named `gree`, a script can call
-it as follows:
+If `web_server` authentication is configured, it also protects `/ac/control` and `/ac/state`.
 
-```yaml
-action: esphome.gree_set_full_state
-data:
-  command: >-
-    {"SchemaVersion":1,"Command":"SetFullState","Power":true,"Mode":"Cool","TargetTemperature":22,"FanSpeed":"Low","HorizontalSwing":"ConstantMiddle","VerticalSwing":"ConstantUp","DisplayMode":"ActualTemperature","DisplayTemperatureUnit":"Celsius","Plasma":false,"Beeper":true,"Sleep":false,"XFan":false,"SaveMode":false}
-```
+### `SetFullState` JSON object
 
-For HTTP clients, send a `POST` request to `http://DEVICE_IP/ac/control` with `Content-Type: application/json`:
+Every property in this table is required. Property names and string values are case-sensitive. Additional properties
+are rejected.
+
+| Property | JSON type | Accepted value | Meaning |
+| --- | --- | --- | --- |
+| `SchemaVersion` | integer | `1` | Version of this JSON schema. It is validated by the ESP and is not sent to the AC. |
+| `Command` | string | `SetFullState` | Selects the complete-state control command. |
+| `Power` | boolean | `true` or `false` | Turns the AC on or off. When `false`, all other properties are still required. |
+| `Mode` | string | See [Mode values](#mode-values) | Operating mode used when `Power` is `true`. |
+| `TargetTemperature` | integer | `16` through `30` | Target temperature in degrees Celsius. It remains Celsius when the display unit is Fahrenheit. |
+| `FanSpeed` | string | See [Fan speed values](#fan-speed-values) | Requested indoor fan speed. |
+| `HorizontalSwing` | string | See [Horizontal direction values](#horizontal-direction-values) | Horizontal louver movement or fixed position. |
+| `VerticalSwing` | string | See [Vertical direction values](#vertical-direction-values) | Vertical louver movement or fixed position. |
+| `DisplayMode` | string | See [Display mode values](#display-mode-values) | What the indoor unit display should show. |
+| `DisplayTemperatureUnit` | string | `Celsius` or `Fahrenheit` | Unit used by the indoor unit display. |
+| `Plasma` | boolean | `true` or `false` | Enables or disables the plasma/ionizer function. |
+| `Beeper` | boolean | `true` or `false` | `true` permits one command beep; `false` requests silent component-sent commands. |
+| `Sleep` | boolean | `true` or `false` | Enables or disables sleep mode. |
+| `XFan` | boolean | `true` or `false` | Enables or disables the post-cooling indoor fan drying function. |
+| `SaveMode` | boolean | `true` or `false` | Enables or disables Save/8 °C Heat mode. |
+
+Some optional functions depend on the AC model. The command is still encoded when the value is valid, but an AC that
+does not implement that function may ignore it.
+
+#### Mode values
+
+| Value | Meaning |
+| --- | --- |
+| `Auto` | Automatic operating mode |
+| `Cool` | Cooling |
+| `Heat` | Heating |
+| `Dry` | Dehumidification |
+| `FanOnly` | Fan without cooling or heating |
+
+`Off` is not a valid `Mode` value. Use `"Power": false` to turn the AC off. The `Mode` property remains required in an
+off command, while the AC retains its last reported operating mode.
+
+#### Fan speed values
+
+| Value | Meaning |
+| --- | --- |
+| `Auto` | Automatic fan speed |
+| `Low` | Low speed |
+| `Medium` | Medium speed |
+| `High` | High speed |
+| `Turbo` | Maximum/turbo speed |
+
+#### Horizontal direction values
+
+| Value | Movement or position |
+| --- | --- |
+| `Off` | Horizontal swing off |
+| `SwingFull` | Move across the full horizontal range |
+| `ConstantLeft` | Fixed left |
+| `ConstantMidLeft` | Fixed between left and middle |
+| `ConstantMiddle` | Fixed middle |
+| `ConstantMidRight` | Fixed between middle and right |
+| `ConstantRight` | Fixed right |
+
+#### Vertical direction values
+
+| Value | Movement or position |
+| --- | --- |
+| `Off` | Vertical swing off |
+| `SwingFull` | Move across the full vertical range |
+| `SwingDown` | Moving swing in the lower range |
+| `SwingMidDown` | Moving swing between middle and down |
+| `SwingMiddle` | Moving swing around the middle |
+| `SwingMidUp` | Moving swing between middle and up |
+| `SwingUp` | Moving swing in the upper range |
+| `ConstantDown` | Fixed down |
+| `ConstantMidDown` | Fixed between down and middle |
+| `ConstantMiddle` | Fixed middle |
+| `ConstantMidUp` | Fixed between middle and up |
+| `ConstantUp` | Fixed up |
+
+#### Display mode values
+
+| Value | Indoor unit display |
+| --- | --- |
+| `Off` | Display off |
+| `Auto` | AC-controlled automatic display mode |
+| `SetTemperature` | Target temperature |
+| `ActualTemperature` | Current indoor temperature |
+| `OutsideTemperature` | Outside temperature, when supported by the AC |
+
+### Complete command example
 
 ```json
 {
@@ -82,22 +182,111 @@ For HTTP clients, send a `POST` request to `http://DEVICE_IP/ac/control` with `C
 }
 ```
 
-Every field is required. Unknown fields and unsupported values are rejected without sending a command to the air
-conditioner. Supported values are:
+### Home Assistant Native API
 
-- `Mode`: `Auto`, `Cool`, `Heat`, `Dry`, `FanOnly`
-- `TargetTemperature`: a whole number from `16` through `30`
-- `FanSpeed`: `Auto`, `Low`, `Medium`, `High`, `Turbo`
-- `HorizontalSwing`: `Off`, `SwingFull`, `ConstantLeft`, `ConstantMidLeft`, `ConstantMiddle`, `ConstantMidRight`,
-  `ConstantRight`
-- `VerticalSwing`: `Off`, `SwingFull`, `SwingDown`, `SwingMidDown`, `SwingMiddle`, `SwingMidUp`, `SwingUp`,
-  `ConstantDown`, `ConstantMidDown`, `ConstantMiddle`, `ConstantMidUp`, `ConstantUp`
-- `DisplayMode`: `Off`, `Auto`, `SetTemperature`, `ActualTemperature`, `OutsideTemperature`
-- `DisplayTemperatureUnit`: `Celsius`, `Fahrenheit`
-- `Power`, `Plasma`, `Beeper`, `Sleep`, `XFan`, `SaveMode`: JSON booleans (`true` or `false`)
+Home Assistant exposes the registered action as `esphome.<node_name>_set_full_state`. For an ESPHome node named
+`gree`, use:
 
-Read the current state with `GET http://DEVICE_IP/ac/state`. The response includes `CurrentTemperature`, which is
-read-only and is therefore not accepted as part of a control command.
+```yaml
+action: esphome.gree_set_full_state
+data:
+  command: >-
+    {"SchemaVersion":1,"Command":"SetFullState","Power":true,"Mode":"Cool","TargetTemperature":22,"FanSpeed":"Low","HorizontalSwing":"ConstantMiddle","VerticalSwing":"ConstantUp","DisplayMode":"ActualTemperature","DisplayTemperatureUnit":"Celsius","Plasma":false,"Beeper":true,"Sleep":false,"XFan":false,"SaveMode":false}
+```
 
-The HTTP endpoint shares ESPHome's HTTP server and honors `web_server` authentication when authentication is configured.
-Native API and HTTP both use the same parser and the same single-update path to the air conditioner.
+The Native API action has one parameter:
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `command` | string | Yes | Complete `SetFullState` JSON object, up to 2048 bytes |
+
+Native API custom actions do not return a response body. Acceptance is logged as `Accepted complete state command; one
+AC state update is pending`. Validation and readiness failures are written to the ESPHome log and do not send an AC
+update.
+
+### HTTP control API
+
+Send the complete JSON object to:
+
+```text
+POST http://DEVICE_IP/ac/control
+Content-Type: application/json
+```
+
+A successful request returns HTTP `200`:
+
+```json
+{
+  "Success": true,
+  "Status": "Accepted",
+  "Message": "The complete state will be applied as one air-conditioner update"
+}
+```
+
+HTTP errors use this shape:
+
+```json
+{
+  "Success": false,
+  "Error": "InvalidCommand",
+  "Detail": "Missing required field: FanSpeed"
+}
+```
+
+| HTTP status | Error | Meaning |
+| --- | --- | --- |
+| `400` | `PayloadTooLarge` | Request body exceeds 2048 bytes |
+| `400` | `InvalidRequestBody` | Request body chunks are incomplete or out of order |
+| `409` | `AirConditionerNotReady` | The ESP has no active serial connection to the AC |
+| `422` | `InvalidCommand` | Empty or invalid JSON, a missing or unknown property, wrong type, or unsupported value |
+
+### HTTP state API
+
+Read the current state with:
+
+```text
+GET http://DEVICE_IP/ac/state
+```
+
+Example response:
+
+```json
+{
+  "Ready": true,
+  "Power": true,
+  "Mode": "Cool",
+  "TargetTemperature": 22,
+  "CurrentTemperature": 26,
+  "FanSpeed": "Low",
+  "HorizontalSwing": "ConstantMiddle",
+  "VerticalSwing": "ConstantUp",
+  "DisplayMode": "ActualTemperature",
+  "DisplayTemperatureUnit": "Celsius",
+  "Plasma": false,
+  "Beeper": true,
+  "Sleep": false,
+  "XFan": false,
+  "SaveMode": false
+}
+```
+
+| Response property | Type | Meaning |
+| --- | --- | --- |
+| `Ready` | boolean | Whether valid serial communication with the AC is active |
+| `Power` | boolean | Current reported power state |
+| `Mode` | string | `Off`, `Auto`, `Cool`, `Heat`, `Dry`, or `FanOnly` |
+| `TargetTemperature` | number or `null` | Current target temperature; `null` until known |
+| `CurrentTemperature` | number or `null` | Current indoor temperature; `null` until known |
+| `FanSpeed` | string | Current normalized fan speed |
+| `HorizontalSwing` | string | Current normalized horizontal movement or position |
+| `VerticalSwing` | string | Current normalized vertical movement or position |
+| `DisplayMode` | string | Current normalized indoor display mode |
+| `DisplayTemperatureUnit` | string | `Celsius` or `Fahrenheit` |
+| `Plasma` | boolean | Current plasma/ionizer state |
+| `Beeper` | boolean | Current command-beeper state |
+| `Sleep` | boolean | Current sleep-mode state |
+| `XFan` | boolean | Current X-Fan state |
+| `SaveMode` | boolean | Current Save/8 °C Heat state |
+
+`CurrentTemperature` is read-only. Including it in `SetFullState` is treated as an unknown property and rejects the
+entire command.
