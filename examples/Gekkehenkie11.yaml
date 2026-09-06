@@ -14,12 +14,17 @@ esp8266:
 
 # Enable Home Assistant API
 api:
+  custom_services: true
   encryption:
     key: "[insert yours]"
 
 ota:
   - platform: esphome
     password: "[insert yours]"
+  - platform: web_server
+
+web_server:
+  port: 80
 
 wifi:
   ssid: !secret wifi_ssid
@@ -48,7 +53,7 @@ time:
   - platform: sntp
 
 external_components:
-  - source: github://gekkehenkie11/esphome_gree_ac
+  - source: github://zain1144/esphome_gree_ac@main
     components: [sinclair_ac]
     refresh: 0s
 

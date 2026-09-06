@@ -14,7 +14,7 @@ from esphome.components import (
 )
 
 AUTO_LOAD = ["switch", "sensor", "select", "json", "web_server_base"]
-DEPENDENCIES = ["uart", "network"]
+DEPENDENCIES = ["uart", "network", "api"]
 
 sinclair_ac_ns = cg.esphome_ns.namespace("sinclair_ac")
 SinclairAC = sinclair_ac_ns.class_(

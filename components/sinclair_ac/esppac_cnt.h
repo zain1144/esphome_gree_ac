@@ -1,6 +1,7 @@
 // based on: https://github.com/DomiStyle/esphome-panasonic-ac
 #include "esphome/components/climate/climate.h"
 #include "esphome/components/climate/climate_mode.h"
+#include "esphome/components/api/custom_api_device.h"
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "esppac.h"
@@ -169,7 +170,7 @@ struct FullCommand {
         bool save_mode;
 };
 
-class SinclairACCNT : public SinclairAC, public AsyncWebHandler {
+class SinclairACCNT : public SinclairAC, public AsyncWebHandler, public api::CustomAPIDevice {
     public:
         void control(const climate::ClimateCall &call) override;
 
@@ -245,6 +246,7 @@ class SinclairACCNT : public SinclairAC, public AsyncWebHandler {
         bool determine_xfan();
         bool determine_save();
 
+        void on_native_full_command_(std::string command_json);
         bool parse_full_command_(const std::string &body, FullCommand &command, std::string &error);
         void apply_full_command_(const FullCommand &command);
         json::SerializationBuffer<> state_json_();
