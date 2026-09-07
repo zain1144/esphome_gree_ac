@@ -36,6 +36,22 @@ After you've connected the module to your AC, it should pop under settings/integ
 
 **USE AT YOUR OWN RISK!**
 
+## Cooling-only models
+
+Heating remains enabled by default for backward compatibility. If an AC supports cooling and fan modes but not
+heating, disable the unsupported mode in the climate configuration:
+
+```yaml
+climate:
+  - platform: sinclair_ac
+    name: ${devicename}
+    supports_heat: false
+```
+
+This also lets Home Assistant's generic `climate.turn_on` action select `Cool` instead of first trying the advertised
+`Heat` mode. It fixes power-on commands from assistants such as Alexa while preserving heating support for other AC
+models.
+
 ## Complete-state API reference
 
 The component accepts one complete control command, `SetFullState`, through either ESPHome Native API or HTTP. Both

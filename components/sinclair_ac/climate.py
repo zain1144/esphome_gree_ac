@@ -43,6 +43,7 @@ CONF_XFAN_SWITCH                = "xfan_switch"
 CONF_SAVE_SWITCH                = "save_switch"
 
 CONF_CURRENT_TEMPERATURE_SENSOR = "current_temperature_sensor"
+CONF_SUPPORTS_HEAT = "supports_heat"
 
 HORIZONTAL_SWING_OPTIONS = [
     "0 - OFF",
@@ -112,6 +113,7 @@ CONFIG_SCHEMA = cv.All(
                 web_server_base.CONF_WEB_SERVER_BASE_ID
             ): cv.use_id(web_server_base.WebServerBase),
             cv.Optional(CONF_CURRENT_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
+            cv.Optional(CONF_SUPPORTS_HEAT, default=True): cv.boolean,
         }
     ),
 )
@@ -127,6 +129,7 @@ async def to_code(config):
         config[web_server_base.CONF_WEB_SERVER_BASE_ID]
     )
     cg.add(var.set_web_server_base(web_server))
+    cg.add(var.set_supports_heat(config[CONF_SUPPORTS_HEAT]))
     
     if CONF_HORIZONTAL_SWING_SELECT in config:
         conf = config[CONF_HORIZONTAL_SWING_SELECT]
