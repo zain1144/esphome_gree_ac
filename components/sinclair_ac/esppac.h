@@ -103,6 +103,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         void set_save_switch(switch_::Switch *plasma_switch);
 
         void set_current_temperature_sensor(sensor::Sensor *current_temperature_sensor);
+        void set_supports_heat(bool supports_heat) { this->supports_heat_ = supports_heat; }
 
         void setup() override;
         void loop() override;
@@ -121,6 +122,7 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         switch_::Switch *save_switch_            = nullptr; /* Switch for save */
 
         sensor::Sensor *current_temperature_sensor_ = nullptr; /* If user wants to replace reported temperature by an external sensor readout */
+        bool supports_heat_{true}; /* Heating is available unless disabled for cooling-only models */
 
         std::string vertical_swing_state_;
         std::string horizontal_swing_state_;
