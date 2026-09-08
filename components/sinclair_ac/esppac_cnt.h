@@ -247,6 +247,7 @@ class SinclairACCNT : public SinclairAC, public AsyncWebHandler, public api::Cus
         bool determine_save();
 
         void on_native_full_command_(std::string command_json);
+        FullCommand current_full_command_();
         bool parse_full_command_(const std::string &body, FullCommand &command, std::string &error);
         void apply_full_command_(const FullCommand &command);
         json::SerializationBuffer<> state_json_();
