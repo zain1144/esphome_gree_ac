@@ -1,3 +1,5 @@
+[English](README.md) | [العربية](README.ar.md)
+
 # Open source WIFI module replacement for Gree protocol based AC's for Home Assistant.
 This repository adds support for ESP-based WiFi modules to interface with Gree/Sinclair AC units.
 It's forked from https://github.com/piotrva/esphome_gree_ac, big thanks to @piotrva for his work!
@@ -16,6 +18,14 @@ It's now compatible with GRJWB04-J / Cs532ae wifi modules
 
 # Current state:
 No known problems! if you run into an issue though, please let me know.
+
+## Interactive command builder
+
+Use the browser-based builder to select only the AC properties you want to change and generate a ready-to-copy
+Home Assistant Native API, cURL, PowerShell, raw HTTP, or JSON command. Nothing is sent to the AC by the page.
+
+- [Open the command builder in English](https://zain1144.github.io/esphome_gree_ac/en/)
+- [افتح منشئ الأوامر بالعربية](https://zain1144.github.io/esphome_gree_ac/)
 
 # HOW TO 
 You can flash this to an ESP module. I used an ESP01-M module, like this one:
