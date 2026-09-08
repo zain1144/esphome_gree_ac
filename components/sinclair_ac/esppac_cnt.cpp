@@ -118,12 +118,12 @@ void SinclairACCNT::setup()
 {
     SinclairAC::setup();
     this->register_service(&SinclairACCNT::on_native_full_command_, "set_full_state", {"command"});
-    ESP_LOGCONFIG(TAG, "Full command Native API action enabled as set_full_state");
+    ESP_LOGCONFIG(TAG, "State command Native API action enabled as set_full_state");
     if (this->web_server_base_ != nullptr)
     {
         this->web_server_base_->init();
         this->web_server_base_->add_handler(this);
-        ESP_LOGCONFIG(TAG, "Full command HTTP endpoints enabled at %s and %s", FULL_COMMAND_PATH, STATE_PATH);
+        ESP_LOGCONFIG(TAG, "State command HTTP endpoints enabled at %s and %s", FULL_COMMAND_PATH, STATE_PATH);
     }
     ESP_LOGD(TAG, "Using serial protocol for Sinclair AC");
     Temrec0[0] = 15.5555555555556;
@@ -360,16 +360,17 @@ void SinclairACCNT::handleRequest(AsyncWebServerRequest *request)
         return;
     }
 
-    FullCommand command;
+    if (this->state_ != ACState::Ready)
+    {
+        this->send_json_error_(request, 409, "AirConditionerNotReady", "No active serial connection to the air conditioner");
+        return;
+    }
+
+    FullCommand command = this->current_full_command_();
     std::string error;
     if (!this->parse_full_command_(body.data, command, error))
     {
         this->send_json_error_(request, 422, "InvalidCommand", error);
-        return;
-    }
-    if (this->state_ != ACState::Ready)
-    {
-        this->send_json_error_(request, 409, "AirConditionerNotReady", "No active serial connection to the air conditioner");
         return;
     }
 
@@ -377,27 +378,59 @@ void SinclairACCNT::handleRequest(AsyncWebServerRequest *request)
     auto response = json::build_json([](JsonObject root) {
         root["Success"] = true;
         root["Status"] = "Accepted";
-        root["Message"] = "The complete state will be applied as one air-conditioner update";
+        root["Message"] = "The requested state changes will be applied as one air-conditioner update";
     });
     request->send(200, "application/json", response.c_str());
 }
 
 void SinclairACCNT::on_native_full_command_(std::string command_json)
 {
-    FullCommand command;
+    if (this->state_ != ACState::Ready)
+    {
+        ESP_LOGW(TAG, "Rejected Native API state command: no active serial connection to the air conditioner");
+        return;
+    }
+
+    FullCommand command = this->current_full_command_();
     std::string error;
     if (!this->parse_full_command_(command_json, command, error))
     {
-        ESP_LOGW(TAG, "Rejected complete Native API command: %s", error.c_str());
-        return;
-    }
-    if (this->state_ != ACState::Ready)
-    {
-        ESP_LOGW(TAG, "Rejected complete Native API command: no active serial connection to the air conditioner");
+        ESP_LOGW(TAG, "Rejected Native API state command: %s", error.c_str());
         return;
     }
 
     this->apply_full_command_(command);
+}
+
+FullCommand SinclairACCNT::current_full_command_()
+{
+    FullCommand command;
+    command.power = this->mode != climate::CLIMATE_MODE_OFF;
+    command.mode = command.power ? this->mode : this->mode_internal_;
+    switch (command.mode)
+    {
+        case climate::CLIMATE_MODE_AUTO:
+        case climate::CLIMATE_MODE_COOL:
+        case climate::CLIMATE_MODE_HEAT:
+        case climate::CLIMATE_MODE_DRY:
+        case climate::CLIMATE_MODE_FAN_ONLY:
+            break;
+        default:
+            command.mode = climate::CLIMATE_MODE_AUTO;
+            break;
+    }
+    command.target_temperature = this->target_temperature;
+    command.fan_mode = this->has_custom_fan_mode() ? this->get_custom_fan_mode().str() : fan_modes::FAN_AUTO;
+    command.horizontal_swing = this->horizontal_swing_state_;
+    command.vertical_swing = this->vertical_swing_state_;
+    command.display_mode = this->display_state_;
+    command.display_unit = this->display_unit_state_;
+    command.plasma = this->plasma_state_;
+    command.beeper = this->beeper_state_;
+    command.sleep = this->sleep_state_;
+    command.xfan = this->xfan_state_;
+    command.save_mode = this->save_state_;
+    return command;
 }
 
 bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &command, std::string &error)
@@ -421,11 +454,12 @@ bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &co
     }
     JsonObject root = document.as<JsonObject>();
 
-    const char *required_fields[] = {
+    const char *known_fields[] = {
         "SchemaVersion", "Command", "Power", "Mode", "TargetTemperature", "FanSpeed",
         "HorizontalSwing", "VerticalSwing", "DisplayMode", "DisplayTemperatureUnit",
         "Plasma", "Beeper", "Sleep", "XFan", "SaveMode",
     };
+    const char *required_fields[] = {"SchemaVersion", "Command"};
     for (const char *field : required_fields)
     {
         if (root[field].isNull())
@@ -435,10 +469,11 @@ bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &co
         }
     }
 
+    bool has_writable_field = false;
     for (JsonPair pair : root)
     {
         bool known = false;
-        for (const char *field : required_fields)
+        for (const char *field : known_fields)
         {
             if (strcmp(pair.key().c_str(), field) == 0)
             {
@@ -451,6 +486,13 @@ bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &co
             error = std::string("Unknown field: ") + pair.key().c_str();
             return false;
         }
+        if (strcmp(pair.key().c_str(), "SchemaVersion") != 0 && strcmp(pair.key().c_str(), "Command") != 0)
+            has_writable_field = true;
+    }
+    if (!has_writable_field)
+    {
+        error = "Command must contain at least one writable state field";
+        return false;
     }
 
     if (!root["SchemaVersion"].is<int>() || root["SchemaVersion"].as<int>() != 1)
@@ -464,9 +506,20 @@ bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &co
         return false;
     }
 
+    auto has_field = [&root](const char *field) {
+        for (JsonPair pair : root)
+        {
+            if (strcmp(pair.key().c_str(), field) == 0)
+                return true;
+        }
+        return false;
+    };
+
     const char *boolean_fields[] = {"Power", "Plasma", "Beeper", "Sleep", "XFan", "SaveMode"};
     for (const char *field : boolean_fields)
     {
+        if (!has_field(field))
+            continue;
         if (!root[field].is<bool>())
         {
             error = std::string(field) + " must be true or false";
@@ -474,39 +527,45 @@ bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &co
         }
     }
 
-    if (!root["Mode"].is<const char *>())
+    if (has_field("Mode"))
     {
-        error = "Mode must be a string";
-        return false;
-    }
-    const std::string mode = root["Mode"].as<const char *>();
-    if (mode == "Auto")
-        command.mode = climate::CLIMATE_MODE_AUTO;
-    else if (mode == "Cool")
-        command.mode = climate::CLIMATE_MODE_COOL;
-    else if (mode == "Heat")
-        command.mode = climate::CLIMATE_MODE_HEAT;
-    else if (mode == "Dry")
-        command.mode = climate::CLIMATE_MODE_DRY;
-    else if (mode == "FanOnly")
-        command.mode = climate::CLIMATE_MODE_FAN_ONLY;
-    else
-    {
-        error = "Mode must be Auto, Cool, Heat, Dry, or FanOnly";
-        return false;
+        if (!root["Mode"].is<const char *>())
+        {
+            error = "Mode must be a string";
+            return false;
+        }
+        const std::string mode = root["Mode"].as<const char *>();
+        if (mode == "Auto")
+            command.mode = climate::CLIMATE_MODE_AUTO;
+        else if (mode == "Cool")
+            command.mode = climate::CLIMATE_MODE_COOL;
+        else if (mode == "Heat")
+            command.mode = climate::CLIMATE_MODE_HEAT;
+        else if (mode == "Dry")
+            command.mode = climate::CLIMATE_MODE_DRY;
+        else if (mode == "FanOnly")
+            command.mode = climate::CLIMATE_MODE_FAN_ONLY;
+        else
+        {
+            error = "Mode must be Auto, Cool, Heat, Dry, or FanOnly";
+            return false;
+        }
     }
 
-    if (!root["TargetTemperature"].is<float>() && !root["TargetTemperature"].is<int>())
+    if (has_field("TargetTemperature"))
     {
-        error = "TargetTemperature must be a number";
-        return false;
-    }
-    command.target_temperature = root["TargetTemperature"].as<float>();
-    if (command.target_temperature < MIN_TEMPERATURE || command.target_temperature > MAX_TEMPERATURE ||
-        std::fabs(command.target_temperature - std::round(command.target_temperature)) > 0.001f)
-    {
-        error = "TargetTemperature must be a whole number from 16 through 30";
-        return false;
+        if (!root["TargetTemperature"].is<float>() && !root["TargetTemperature"].is<int>())
+        {
+            error = "TargetTemperature must be a number";
+            return false;
+        }
+        command.target_temperature = root["TargetTemperature"].as<float>();
+        if (command.target_temperature < MIN_TEMPERATURE || command.target_temperature > MAX_TEMPERATURE ||
+            std::fabs(command.target_temperature - std::round(command.target_temperature)) > 0.001f)
+        {
+            error = "TargetTemperature must be a whole number from 16 through 30";
+            return false;
+        }
     }
 
     auto read_string = [&root, &error](const char *field, std::string &value) {
@@ -519,119 +578,140 @@ bool SinclairACCNT::parse_full_command_(const std::string &body, FullCommand &co
         return true;
     };
 
-    std::string fan;
-    if (!read_string("FanSpeed", fan))
-        return false;
-    if (fan == "Auto")
-        command.fan_mode = fan_modes::FAN_AUTO;
-    else if (fan == "Low")
-        command.fan_mode = fan_modes::FAN_LOW;
-    else if (fan == "Medium")
-        command.fan_mode = fan_modes::FAN_MED;
-    else if (fan == "High")
-        command.fan_mode = fan_modes::FAN_HIGH;
-    else if (fan == "Turbo")
-        command.fan_mode = fan_modes::FAN_TURBO;
-    else
+    if (has_field("FanSpeed"))
     {
-        error = "FanSpeed must be Auto, Low, Medium, High, or Turbo";
-        return false;
+        std::string fan;
+        if (!read_string("FanSpeed", fan))
+            return false;
+        if (fan == "Auto")
+            command.fan_mode = fan_modes::FAN_AUTO;
+        else if (fan == "Low")
+            command.fan_mode = fan_modes::FAN_LOW;
+        else if (fan == "Medium")
+            command.fan_mode = fan_modes::FAN_MED;
+        else if (fan == "High")
+            command.fan_mode = fan_modes::FAN_HIGH;
+        else if (fan == "Turbo")
+            command.fan_mode = fan_modes::FAN_TURBO;
+        else
+        {
+            error = "FanSpeed must be Auto, Low, Medium, High, or Turbo";
+            return false;
+        }
     }
 
-    std::string horizontal;
-    if (!read_string("HorizontalSwing", horizontal))
-        return false;
-    if (horizontal == "Off")
-        command.horizontal_swing = horizontal_swing_options::OFF;
-    else if (horizontal == "SwingFull")
-        command.horizontal_swing = horizontal_swing_options::FULL;
-    else if (horizontal == "ConstantLeft")
-        command.horizontal_swing = horizontal_swing_options::CLEFT;
-    else if (horizontal == "ConstantMidLeft")
-        command.horizontal_swing = horizontal_swing_options::CMIDL;
-    else if (horizontal == "ConstantMiddle")
-        command.horizontal_swing = horizontal_swing_options::CMID;
-    else if (horizontal == "ConstantMidRight")
-        command.horizontal_swing = horizontal_swing_options::CMIDR;
-    else if (horizontal == "ConstantRight")
-        command.horizontal_swing = horizontal_swing_options::CRIGHT;
-    else
+    if (has_field("HorizontalSwing"))
     {
-        error = "HorizontalSwing has an unsupported value";
-        return false;
+        std::string horizontal;
+        if (!read_string("HorizontalSwing", horizontal))
+            return false;
+        if (horizontal == "Off")
+            command.horizontal_swing = horizontal_swing_options::OFF;
+        else if (horizontal == "SwingFull")
+            command.horizontal_swing = horizontal_swing_options::FULL;
+        else if (horizontal == "ConstantLeft")
+            command.horizontal_swing = horizontal_swing_options::CLEFT;
+        else if (horizontal == "ConstantMidLeft")
+            command.horizontal_swing = horizontal_swing_options::CMIDL;
+        else if (horizontal == "ConstantMiddle")
+            command.horizontal_swing = horizontal_swing_options::CMID;
+        else if (horizontal == "ConstantMidRight")
+            command.horizontal_swing = horizontal_swing_options::CMIDR;
+        else if (horizontal == "ConstantRight")
+            command.horizontal_swing = horizontal_swing_options::CRIGHT;
+        else
+        {
+            error = "HorizontalSwing has an unsupported value";
+            return false;
+        }
     }
 
-    std::string vertical;
-    if (!read_string("VerticalSwing", vertical))
-        return false;
-    if (vertical == "Off")
-        command.vertical_swing = vertical_swing_options::OFF;
-    else if (vertical == "SwingFull")
-        command.vertical_swing = vertical_swing_options::FULL;
-    else if (vertical == "SwingDown")
-        command.vertical_swing = vertical_swing_options::DOWN;
-    else if (vertical == "SwingMidDown")
-        command.vertical_swing = vertical_swing_options::MIDD;
-    else if (vertical == "SwingMiddle")
-        command.vertical_swing = vertical_swing_options::MID;
-    else if (vertical == "SwingMidUp")
-        command.vertical_swing = vertical_swing_options::MIDU;
-    else if (vertical == "SwingUp")
-        command.vertical_swing = vertical_swing_options::UP;
-    else if (vertical == "ConstantDown")
-        command.vertical_swing = vertical_swing_options::CDOWN;
-    else if (vertical == "ConstantMidDown")
-        command.vertical_swing = vertical_swing_options::CMIDD;
-    else if (vertical == "ConstantMiddle")
-        command.vertical_swing = vertical_swing_options::CMID;
-    else if (vertical == "ConstantMidUp")
-        command.vertical_swing = vertical_swing_options::CMIDU;
-    else if (vertical == "ConstantUp")
-        command.vertical_swing = vertical_swing_options::CUP;
-    else
+    if (has_field("VerticalSwing"))
     {
-        error = "VerticalSwing has an unsupported value";
-        return false;
+        std::string vertical;
+        if (!read_string("VerticalSwing", vertical))
+            return false;
+        if (vertical == "Off")
+            command.vertical_swing = vertical_swing_options::OFF;
+        else if (vertical == "SwingFull")
+            command.vertical_swing = vertical_swing_options::FULL;
+        else if (vertical == "SwingDown")
+            command.vertical_swing = vertical_swing_options::DOWN;
+        else if (vertical == "SwingMidDown")
+            command.vertical_swing = vertical_swing_options::MIDD;
+        else if (vertical == "SwingMiddle")
+            command.vertical_swing = vertical_swing_options::MID;
+        else if (vertical == "SwingMidUp")
+            command.vertical_swing = vertical_swing_options::MIDU;
+        else if (vertical == "SwingUp")
+            command.vertical_swing = vertical_swing_options::UP;
+        else if (vertical == "ConstantDown")
+            command.vertical_swing = vertical_swing_options::CDOWN;
+        else if (vertical == "ConstantMidDown")
+            command.vertical_swing = vertical_swing_options::CMIDD;
+        else if (vertical == "ConstantMiddle")
+            command.vertical_swing = vertical_swing_options::CMID;
+        else if (vertical == "ConstantMidUp")
+            command.vertical_swing = vertical_swing_options::CMIDU;
+        else if (vertical == "ConstantUp")
+            command.vertical_swing = vertical_swing_options::CUP;
+        else
+        {
+            error = "VerticalSwing has an unsupported value";
+            return false;
+        }
     }
 
-    std::string display;
-    if (!read_string("DisplayMode", display))
-        return false;
-    if (display == "Off")
-        command.display_mode = display_options::OFF;
-    else if (display == "Auto")
-        command.display_mode = display_options::AUTO;
-    else if (display == "SetTemperature")
-        command.display_mode = display_options::SET;
-    else if (display == "ActualTemperature")
-        command.display_mode = display_options::ACT;
-    else if (display == "OutsideTemperature")
-        command.display_mode = display_options::OUT;
-    else
+    if (has_field("DisplayMode"))
     {
-        error = "DisplayMode must be Off, Auto, SetTemperature, ActualTemperature, or OutsideTemperature";
-        return false;
+        std::string display;
+        if (!read_string("DisplayMode", display))
+            return false;
+        if (display == "Off")
+            command.display_mode = display_options::OFF;
+        else if (display == "Auto")
+            command.display_mode = display_options::AUTO;
+        else if (display == "SetTemperature")
+            command.display_mode = display_options::SET;
+        else if (display == "ActualTemperature")
+            command.display_mode = display_options::ACT;
+        else if (display == "OutsideTemperature")
+            command.display_mode = display_options::OUT;
+        else
+        {
+            error = "DisplayMode must be Off, Auto, SetTemperature, ActualTemperature, or OutsideTemperature";
+            return false;
+        }
     }
 
-    std::string display_unit;
-    if (!read_string("DisplayTemperatureUnit", display_unit))
-        return false;
-    if (display_unit == "Celsius")
-        command.display_unit = display_unit_options::DEGC;
-    else if (display_unit == "Fahrenheit")
-        command.display_unit = display_unit_options::DEGF;
-    else
+    if (has_field("DisplayTemperatureUnit"))
     {
-        error = "DisplayTemperatureUnit must be Celsius or Fahrenheit";
-        return false;
+        std::string display_unit;
+        if (!read_string("DisplayTemperatureUnit", display_unit))
+            return false;
+        if (display_unit == "Celsius")
+            command.display_unit = display_unit_options::DEGC;
+        else if (display_unit == "Fahrenheit")
+            command.display_unit = display_unit_options::DEGF;
+        else
+        {
+            error = "DisplayTemperatureUnit must be Celsius or Fahrenheit";
+            return false;
+        }
     }
 
-    command.power = root["Power"].as<bool>();
-    command.plasma = root["Plasma"].as<bool>();
-    command.beeper = root["Beeper"].as<bool>();
-    command.sleep = root["Sleep"].as<bool>();
-    command.xfan = root["XFan"].as<bool>();
-    command.save_mode = root["SaveMode"].as<bool>();
+    if (has_field("Power"))
+        command.power = root["Power"].as<bool>();
+    if (has_field("Plasma"))
+        command.plasma = root["Plasma"].as<bool>();
+    if (has_field("Beeper"))
+        command.beeper = root["Beeper"].as<bool>();
+    if (has_field("Sleep"))
+        command.sleep = root["Sleep"].as<bool>();
+    if (has_field("XFan"))
+        command.xfan = root["XFan"].as<bool>();
+    if (has_field("SaveMode"))
+        command.save_mode = root["SaveMode"].as<bool>();
     return true;
 }
 
@@ -639,7 +719,7 @@ void SinclairACCNT::apply_full_command_(const FullCommand &command)
 {
     if (this->state_ != ACState::Ready)
     {
-        ESP_LOGW(TAG, "Full command was accepted but the air conditioner is no longer ready");
+        ESP_LOGW(TAG, "State command was accepted but the air conditioner is no longer ready");
         return;
     }
 
@@ -670,7 +750,7 @@ void SinclairACCNT::apply_full_command_(const FullCommand &command)
     this->update_save(command.save_mode);
     this->publish_state();
 
-    ESP_LOGI(TAG, "Accepted complete state command; one AC state update is pending");
+    ESP_LOGI(TAG, "Accepted state command; one AC state update is pending");
 }
 
 json::SerializationBuffer<> SinclairACCNT::state_json_()

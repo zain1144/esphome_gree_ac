@@ -52,11 +52,13 @@ This also lets Home Assistant's generic `climate.turn_on` action select `Cool` i
 `Heat` mode. It fixes power-on commands from assistants such as Alexa while preserving heating support for other AC
 models.
 
-## Complete-state API reference
+## State API reference
 
-The component accepts one complete control command, `SetFullState`, through either ESPHome Native API or HTTP. Both
-transports use the same JSON schema, parser, validation, and single-update path. A valid command changes every writable
-setting in one AC protocol update. Invalid commands change nothing and send no update to the air conditioner.
+The component accepts `SetFullState` through either ESPHome Native API or HTTP. The operation name is retained for
+backward compatibility, but the JSON object can contain either a complete state or only the writable fields that need
+to change. Both transports use the same JSON schema, parser, validation, and single-update path. Missing writable fields
+keep their latest values known to the component; normal AC reports continually refresh the reportable settings. Invalid
+commands change nothing and send no update to the air conditioner.
 
 The JSON command is limited to 2048 bytes. It is carried as a normal Native API string or HTTP request body and does
 not use an ESPHome template text entity, so the template text 255-character limit does not apply.
@@ -65,14 +67,15 @@ not use an ESPHome template text entity, so the template text 255-character limi
 
 | Transport | Operation | Input | Result |
 | --- | --- | --- | --- |
-| Native API | `esphome.<node_name>_set_full_state` | One string argument named `command`, containing the complete JSON object | Validates and schedules one AC state update |
-| HTTP | `POST /ac/control` | The complete JSON object as the request body | Validates and schedules one AC state update |
+| Native API | `esphome.<node_name>_set_full_state` | One string argument named `command`, containing a complete or partial JSON object | Validates and schedules one AC state update |
+| HTTP | `POST /ac/control` | A complete or partial JSON object as the request body | Validates and schedules one AC state update |
 | HTTP | `GET /ac/state` | None | Returns the current known state as JSON |
 | HTTP | `OPTIONS /ac/control` or `OPTIONS /ac/state` | None | Returns `204` for HTTP preflight |
 
-There are no partial custom commands. `SetFullState` always requires every writable field, including fields whose value
-is unchanged or temporarily irrelevant while the unit is off. Normal ESPHome climate and select entities remain
-available separately in Home Assistant.
+`SchemaVersion`, `Command`, and at least one writable state field are required. Every other writable field is optional.
+The component starts with its latest known state, replaces only the supplied fields, validates the complete result, and
+applies it as one logical update. This also works while the AC power is off as long as serial communication is ready.
+Normal ESPHome climate and select entities remain available separately in Home Assistant.
 
 ### Required ESPHome configuration
 
@@ -90,14 +93,14 @@ If `web_server` authentication is configured, it also protects `/ac/control` and
 
 ### `SetFullState` JSON object
 
-Every property in this table is required. Property names and string values are case-sensitive. Additional properties
-are rejected.
+`SchemaVersion` and `Command` are always required. Include one or more of the remaining writable properties. Property
+names and string values are case-sensitive. Additional properties are rejected.
 
 | Property | JSON type | Accepted value | Meaning |
 | --- | --- | --- | --- |
 | `SchemaVersion` | integer | `1` | Version of this JSON schema. It is validated by the ESP and is not sent to the AC. |
-| `Command` | string | `SetFullState` | Selects the complete-state control command. |
-| `Power` | boolean | `true` or `false` | Turns the AC on or off. When `false`, all other properties are still required. |
+| `Command` | string | `SetFullState` | Selects the state control command. The legacy name is kept for compatibility. |
+| `Power` | boolean | `true` or `false` | Turns the AC on or off. It is optional like the other writable properties. |
 | `Mode` | string | See [Mode values](#mode-values) | Operating mode used when `Power` is `true`. |
 | `TargetTemperature` | integer | `16` through `30` | Target temperature in degrees Celsius. It remains Celsius when the display unit is Fahrenheit. |
 | `FanSpeed` | string | See [Fan speed values](#fan-speed-values) | Requested indoor fan speed. |
@@ -124,8 +127,9 @@ does not implement that function may ignore it.
 | `Dry` | Dehumidification |
 | `FanOnly` | Fan without cooling or heating |
 
-`Off` is not a valid `Mode` value. Use `"Power": false` to turn the AC off. The `Mode` property remains required in an
-off command, while the AC retains its last reported operating mode.
+`Off` is not a valid `Mode` value. Use `"Power": false` to turn the AC off. When `Mode` is omitted, the latest reported
+operating mode is preserved. This means a partial `{"Power":true}` command turns an off AC back on in its last known
+mode.
 
 #### Fan speed values
 
@@ -176,6 +180,31 @@ off command, while the AC retains its last reported operating mode.
 | `ActualTemperature` | Current indoor temperature |
 | `OutsideTemperature` | Outside temperature, when supported by the AC |
 
+### Partial command examples
+
+Change only the indoor display:
+
+```json
+{
+  "SchemaVersion": 1,
+  "Command": "SetFullState",
+  "DisplayMode": "Off"
+}
+```
+
+Change the fan, both louvers, and the display together while preserving every other setting:
+
+```json
+{
+  "SchemaVersion": 1,
+  "Command": "SetFullState",
+  "FanSpeed": "Low",
+  "HorizontalSwing": "ConstantMiddle",
+  "VerticalSwing": "ConstantUp",
+  "DisplayMode": "ActualTemperature"
+}
+```
+
 ### Complete command example
 
 ```json
@@ -207,26 +236,33 @@ Home Assistant exposes the registered action as `esphome.<node_name>_set_full_st
 action: esphome.gree_set_full_state
 data:
   command: >-
-    {"SchemaVersion":1,"Command":"SetFullState","Power":true,"Mode":"Cool","TargetTemperature":22,"FanSpeed":"Low","HorizontalSwing":"ConstantMiddle","VerticalSwing":"ConstantUp","DisplayMode":"ActualTemperature","DisplayTemperatureUnit":"Celsius","Plasma":false,"Beeper":true,"Sleep":false,"XFan":false,"SaveMode":false}
+    {"SchemaVersion":1,"Command":"SetFullState","FanSpeed":"Low","HorizontalSwing":"ConstantMiddle","DisplayMode":"Off"}
 ```
 
 The Native API action has one parameter:
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `command` | string | Yes | Complete `SetFullState` JSON object, up to 2048 bytes |
+| `command` | string | Yes | Complete or partial `SetFullState` JSON object, up to 2048 bytes |
 
-Native API custom actions do not return a response body. Acceptance is logged as `Accepted complete state command; one
-AC state update is pending`. Validation and readiness failures are written to the ESPHome log and do not send an AC
-update.
+Native API custom actions do not return a response body. Acceptance is logged as `Accepted state command; one AC state
+update is pending`. Validation and readiness failures are written to the ESPHome log and do not send an AC update.
 
 ### HTTP control API
 
-Send the complete JSON object to:
+Send a complete or partial JSON object to:
 
 ```text
 POST http://DEVICE_IP/ac/control
 Content-Type: application/json
+```
+
+For example, change only the display:
+
+```bash
+curl -X POST http://DEVICE_IP/ac/control \
+  -H "Content-Type: application/json" \
+  --data '{"SchemaVersion":1,"Command":"SetFullState","DisplayMode":"Off"}'
 ```
 
 A successful request returns HTTP `200`:
@@ -235,7 +271,7 @@ A successful request returns HTTP `200`:
 {
   "Success": true,
   "Status": "Accepted",
-  "Message": "The complete state will be applied as one air-conditioner update"
+  "Message": "The requested state changes will be applied as one air-conditioner update"
 }
 ```
 
@@ -245,7 +281,7 @@ HTTP errors use this shape:
 {
   "Success": false,
   "Error": "InvalidCommand",
-  "Detail": "Missing required field: FanSpeed"
+  "Detail": "Missing required field: Command"
 }
 ```
 
@@ -254,7 +290,7 @@ HTTP errors use this shape:
 | `400` | `PayloadTooLarge` | Request body exceeds 2048 bytes |
 | `400` | `InvalidRequestBody` | Request body chunks are incomplete or out of order |
 | `409` | `AirConditionerNotReady` | The ESP has no active serial connection to the AC |
-| `422` | `InvalidCommand` | Empty or invalid JSON, a missing or unknown property, wrong type, or unsupported value |
+| `422` | `InvalidCommand` | Empty or invalid JSON, a missing required field, no writable field, an unknown property, wrong type, or unsupported value |
 
 ### HTTP state API
 
@@ -305,4 +341,5 @@ Example response:
 | `SaveMode` | boolean | Current Save/8 °C Heat state |
 
 `CurrentTemperature` is read-only. Including it in `SetFullState` is treated as an unknown property and rejects the
-entire command.
+entire command. State returned by this endpoint is the latest state known to the component; a successful control
+response means the command was accepted, while the following AC report confirms the resulting state.
