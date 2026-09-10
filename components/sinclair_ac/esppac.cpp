@@ -36,9 +36,14 @@ climate::ClimateTraits SinclairAC::traits()
 
 void SinclairAC::setup()
 {
-  // Initialize times
-    this->init_time_ = millis();
-    this->last_packet_sent_ = millis();
+    // Start from a deterministic UART state. This also makes a future component
+    // reinitialization recover cleanly from a partially received frame.
+    const uint32_t now = millis();
+    this->init_time_ = now;
+    this->last_packet_sent_ = now;
+    this->last_packet_received_ = now;
+    this->wait_response_ = false;
+    this->reset_serial_process_();
     this->set_supported_custom_fan_modes({fan_modes::FAN_AUTO, fan_modes::FAN_LOW,
                                           fan_modes::FAN_MED, fan_modes::FAN_HIGH, fan_modes::FAN_TURBO});
 
@@ -48,6 +53,14 @@ void SinclairAC::setup()
 void SinclairAC::loop()
 {
     read_data();  // Read data from UART (if there is any)
+}
+
+void SinclairAC::reset_serial_process_()
+{
+    this->serialProcess_.data.clear();
+    this->serialProcess_.data_cnt = 0;
+    this->serialProcess_.frame_size = 0;
+    this->serialProcess_.state = STATE_WAIT_SYNC;
 }
 
 void SinclairAC::read_data()
@@ -64,14 +77,13 @@ void SinclairAC::read_data()
 
         if (this->serialProcess_.state == STATE_RESTART)
         {
-            this->serialProcess_.data.clear();
-            this->serialProcess_.state = STATE_WAIT_SYNC;
+            this->reset_serial_process_();
         }
         
         this->serialProcess_.data.push_back(c);
         if (this->serialProcess_.data.size() >= DATA_MAX)
         {
-            this->serialProcess_.data.clear();
+            this->reset_serial_process_();
             continue;
         }
         switch (this->serialProcess_.state)
@@ -108,8 +120,7 @@ void SinclairAC::read_data()
             case STATE_COMPLETE:
                 break;
             default:
-                this->serialProcess_.state = STATE_WAIT_SYNC;
-                this->serialProcess_.data.clear();
+                this->reset_serial_process_();
                 break;
         }
 

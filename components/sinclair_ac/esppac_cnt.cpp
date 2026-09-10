@@ -171,8 +171,6 @@ void SinclairACCNT::loop()
     {
         /* do not forget to order for restart of the recieve state machine */
         this->serialProcess_.state = STATE_RESTART;
-        /* mark that we have recieved a response */
-        this->wait_response_ = false;
         /* log for ESPHome debug */
         log_packet(this->serialProcess_.data);
 
@@ -180,6 +178,9 @@ void SinclairACCNT::loop()
         {
             return;
         }
+
+        /* Only a valid unit report completes the request/response exchange. */
+        this->complete_pending_exchange_();
 
         this->last_packet_received_ = millis();  /* Set the time at which we received our last packet */
 
@@ -211,6 +212,44 @@ void SinclairACCNT::loop()
     }
 }
 
+void SinclairACCNT::request_update_()
+{
+    this->update_ = ACUpdate::UpdateStart;
+    this->update_generation_++;
+}
+
+void SinclairACCNT::complete_pending_exchange_()
+{
+    if (!this->wait_response_)
+    {
+        return;
+    }
+
+    this->wait_response_ = false;
+
+    /* A control request may arrive while an older packet is in flight. Do not
+       let the older response advance (and thereby discard) that newer update. */
+    if (this->pending_update_generation_ != this->update_generation_)
+    {
+        return;
+    }
+
+    switch (this->pending_update_)
+    {
+        case ACUpdate::NoUpdate:
+            break;
+        case ACUpdate::UpdateStart:
+            this->update_ = ACUpdate::UpdateClear;
+            break;
+        case ACUpdate::UpdateClear:
+            this->update_ = ACUpdate::NoUpdate;
+            break;
+        default:
+            this->update_ = ACUpdate::NoUpdate;
+            break;
+    }
+}
+
 /*
  * ESPHome control request
  */
@@ -224,7 +263,7 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
     {
         ESP_LOGV(TAG, "Requested mode change");
         reqmodechange = true;
-        this->update_ = ACUpdate::UpdateStart;
+        this->request_update_();
         this->mode = *call.get_mode();
     }
 
@@ -232,7 +271,7 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
     {
         ESP_LOGV(TAG, "Requested target teperature change");
         this->reqmodechange = true;
-        this->update_ = ACUpdate::UpdateStart;
+        this->request_update_();
         this->target_temperature = *call.get_target_temperature();
         if (this->target_temperature < MIN_TEMPERATURE)
         {
@@ -248,7 +287,7 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
     {
         ESP_LOGV(TAG, "Requested fan mode change");
         reqmodechange = true;
-        this->update_ = ACUpdate::UpdateStart;
+        this->request_update_();
         this->set_custom_fan_mode_(call.get_custom_fan_mode());
     }
 
@@ -256,7 +295,7 @@ void SinclairACCNT::control(const climate::ClimateCall &call)
     {
         ESP_LOGV(TAG, "Requested swing mode change");
         reqmodechange = true;
-        this->update_ = ACUpdate::UpdateStart;
+        this->request_update_();
         switch (*call.get_swing_mode()) {
             case climate::CLIMATE_SWING_BOTH:
                 this->vertical_swing_state_   =   vertical_swing_options::FULL;
@@ -737,7 +776,7 @@ void SinclairACCNT::apply_full_command_(const FullCommand &command)
     this->save_state_ = command.save_mode;
 
     this->reqmodechange = true;
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
 
     this->update_swing_horizontal(command.horizontal_swing);
     this->update_swing_vertical(command.vertical_swing);
@@ -796,13 +835,37 @@ void SinclairACCNT::send_json_error_(AsyncWebServerRequest *request, int status,
  */
 void SinclairACCNT::send_packet()
 {
-    std::vector<uint8_t> packet(protocol::SET_PACKET_LEN, 0);  /* Initialize packet contents */
+    const uint32_t now = millis();
+    const uint32_t elapsed = now - this->last_packet_sent_;
 
-    if (this->wait_response_ == true || (millis() - this->last_packet_sent_ < protocol::TIME_REFRESH_PERIOD_MS))
+    if (this->wait_response_)
     {
-        /* do net send packet too often or when we are waiting for report to come */
+        if (elapsed < protocol::TIME_RESPONSE_TIMEOUT_MS)
+        {
+            return;
+        }
+
+        /* The AC sends its report only after receiving our packet. If that
+           exchange is lost (for example while the AC is booting), retry it
+           instead of waiting forever. */
+        if (this->state_ == ACState::Ready)
+        {
+            ESP_LOGW(TAG, "Timed out waiting for AC response; connection lost, retrying");
+        }
+        else
+        {
+            ESP_LOGV(TAG, "Timed out waiting for AC response; retrying");
+        }
+        this->wait_response_ = false;
+        this->reset_serial_process_();
+    }
+
+    if (elapsed < protocol::TIME_REFRESH_PERIOD_MS)
+    {
         return;
     }
+
+    std::vector<uint8_t> packet(protocol::SET_PACKET_LEN, 0);  /* Initialize packet contents */
     
     packet[protocol::SET_CONST_02_BYTE] = protocol::SET_CONST_02_VAL; /* Some always 0x02 byte... */
     packet[protocol::SET_CONST_BIT_BYTE] = protocol::SET_CONST_BIT_MASK; /* Some always true bit */
@@ -1181,29 +1244,13 @@ void SinclairACCNT::send_packet()
     packet.insert(packet.begin(), protocol::SYNC);
 
     //ESP_LOGV(TAG, "Stamp1: %lx", this->last_packet_sent_);
-    this->last_packet_sent_ = millis();  /* Save the time when we sent the last packet */
+    this->last_packet_sent_ = now;       /* Save the time when we sent the last packet */
     
+    this->pending_update_ = this->update_;
+    this->pending_update_generation_ = this->update_generation_;
     this->wait_response_ = true;
     write_array(packet);                 /* Sent the packet by UART */
     log_packet(packet, true);            /* Log uart for debug purposes */
-   
-
-    
-    /* update setting state-machine */
-    switch(this->update_)
-    {
-        case ACUpdate::NoUpdate:
-            break;
-        case ACUpdate::UpdateStart:
-            this->update_ = ACUpdate::UpdateClear;
-            break;
-        case ACUpdate::UpdateClear:
-            this->update_ = ACUpdate::NoUpdate;
-            break;
-        default:
-            this->update_ = ACUpdate::NoUpdate;
-            break;
-    }
 }
 
 /*
@@ -1652,7 +1699,7 @@ void SinclairACCNT::on_vertical_swing_change(const std::string &swing)
 
     ESP_LOGD(TAG, "Setting vertical swing position");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->vertical_swing_state_ = swing;
 }
 
@@ -1663,7 +1710,7 @@ void SinclairACCNT::on_horizontal_swing_change(const std::string &swing)
 
     ESP_LOGD(TAG, "Setting horizontal swing position");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->horizontal_swing_state_ = swing;
 }
 
@@ -1674,7 +1721,7 @@ void SinclairACCNT::on_display_change(const std::string &display)
 
     ESP_LOGD(TAG, "Setting display mode");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->display_state_ = display;
 }
 
@@ -1685,7 +1732,7 @@ void SinclairACCNT::on_display_unit_change(const std::string &display_unit)
 
     ESP_LOGD(TAG, "Setting display unit");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->display_unit_state_ = display_unit;
 }
 
@@ -1696,7 +1743,7 @@ void SinclairACCNT::on_plasma_change(bool plasma)
 
     ESP_LOGD(TAG, "Setting plasma");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->plasma_state_ = plasma;
 }
 
@@ -1707,7 +1754,7 @@ void SinclairACCNT::on_beeper_change(bool beeper)
 
     ESP_LOGD(TAG, "Setting beeper");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->beeper_state_ = beeper;
 }
 
@@ -1718,7 +1765,7 @@ void SinclairACCNT::on_sleep_change(bool sleep)
 
     ESP_LOGD(TAG, "Setting sleep");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->sleep_state_ = sleep;
 }
 
@@ -1729,7 +1776,7 @@ void SinclairACCNT::on_xfan_change(bool xfan)
 
     ESP_LOGD(TAG, "Setting xfan");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->xfan_state_ = xfan;
 }
 
@@ -1740,7 +1787,7 @@ void SinclairACCNT::on_save_change(bool save)
 
     ESP_LOGD(TAG, "Setting save");
 
-    this->update_ = ACUpdate::UpdateStart;
+    this->request_update_();
     this->save_state_ = save;
 }
 
