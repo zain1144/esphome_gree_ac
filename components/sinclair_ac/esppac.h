@@ -12,7 +12,7 @@ namespace esphome {
 
 namespace sinclair_ac {
 
-static const char *const VERSION = "0.3.0-partial-command-api";
+static const char *const VERSION = "0.3.1-uart-recovery";
 
 static const uint8_t READ_TIMEOUT = 20;  // The maximum time to wait before considering a packet complete
 
@@ -83,9 +83,9 @@ static const uint8_t DATA_MAX = 200;
 
 typedef struct {
         std::vector<uint8_t> data;
-        uint8_t data_cnt;
-        uint8_t frame_size;
-        SerialProcessState_t state;
+        uint8_t data_cnt{0};
+        uint8_t frame_size{0};
+        SerialProcessState_t state{STATE_WAIT_SYNC};
 } SerialProcess_t;
 
 class SinclairAC : public Component, public uart::UARTDevice, public climate::Climate {
@@ -130,27 +130,28 @@ class SinclairAC : public Component, public uart::UARTDevice, public climate::Cl
         std::string display_state_;
         std::string display_unit_state_;
 
-        bool plasma_state_;
-        bool beeper_state_;
-        bool sleep_state_;
-        bool xfan_state_;
-        bool save_state_;
+        bool plasma_state_{false};
+        bool beeper_state_{false};
+        bool sleep_state_{false};
+        bool xfan_state_{false};
+        bool save_state_{false};
 
-        SerialProcess_t serialProcess_;
+        SerialProcess_t serialProcess_{};
 
         float Temrec0 [16];
         float Temrec1 [16];
 
-        uint32_t init_time_;   // Stores the current time
+        uint32_t init_time_{0};   // Stores the current time
         // uint32_t last_read_;   // Stores the time at which the last read was done
-        uint32_t last_packet_sent_;  // Stores the time at which the last packet was sent
-        uint32_t last_03packet_sent_;  // Stores the time at which the last packet was sent
-        uint32_t last_packet_received_;  // Stores the time at which the last packet was received
-        bool wait_response_;
+        uint32_t last_packet_sent_{0};  // Stores the time at which the last packet was sent
+        uint32_t last_03packet_sent_{0};  // Stores the time at which the last packet was sent
+        uint32_t last_packet_received_{0};  // Stores the time at which the last packet was received
+        bool wait_response_{false};
 
         climate::ClimateTraits traits() override;
 
         void read_data();
+        void reset_serial_process_();
 
         void update_current_temperature(float temperature);
         void update_target_temperature(float temperature);

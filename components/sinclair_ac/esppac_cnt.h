@@ -148,6 +148,7 @@ namespace protocol {
 
     /* time constraints */
     static const unsigned long TIME_REFRESH_PERIOD_MS   =  300;
+    static const unsigned long TIME_RESPONSE_TIMEOUT_MS = 1000;
     static const unsigned long TIME_TIMEOUT_INACTIVE_MS = 1000;
 }
 
@@ -214,20 +215,25 @@ class SinclairACCNT : public SinclairAC, public AsyncWebHandler, public api::Cus
 
         ACState state_ = ACState::Initializing; /* Stores if the AC is responsive or not */
         ACUpdate update_ = ACUpdate::NoUpdate;  /* Stores if we need tu send update to AC or no */
+        ACUpdate pending_update_{ACUpdate::NoUpdate};
+        uint32_t update_generation_{0};
+        uint32_t pending_update_generation_{0};
 
-        climate::ClimateMode mode_internal_;
-        bool power_internal_;
+        climate::ClimateMode mode_internal_{climate::CLIMATE_MODE_OFF};
+        bool power_internal_{false};
 
         std::string display_mode_internal_;
-        bool display_power_internal_;
+        bool display_power_internal_{false};
 
         bool processUnitReport();
 
         void send_packet();
+        void request_update_();
+        void complete_pending_exchange_();
 
-        bool reqmodechange = false;
-        unsigned char lastpacket[60];
-        unsigned char lastroomtemp;
+        bool reqmodechange{false};
+        unsigned char lastpacket[60]{};
+        unsigned char lastroomtemp{0};
 
         bool verify_packet();
         void handle_packet();
